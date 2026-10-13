@@ -35,9 +35,14 @@ typedef struct {
     char url[1024];
     char fichier[512];
     char nom[128];
+    char formation[128];
+    char organisme[128];
+    char existence[32];
+    char siret[32];
     char modele[512];
     char sortie[512];
     char dossier[512];
+    char signature[512];
     int annee, mois; /* 0 = automatique */
     int sans_pdf;
 } config;
@@ -59,8 +64,13 @@ static void lire_conf(const char *chemin, config *c, int obligatoire)
         while (*v == ' ') v++;
         if (!strcmp(k, "url")) snprintf(c->url, sizeof c->url, "%s", v);
         else if (!strcmp(k, "nom")) snprintf(c->nom, sizeof c->nom, "%s", v);
+        else if (!strcmp(k, "formation")) snprintf(c->formation, sizeof c->formation, "%s", v);
+        else if (!strcmp(k, "organisme")) snprintf(c->organisme, sizeof c->organisme, "%s", v);
+        else if (!strcmp(k, "existence")) snprintf(c->existence, sizeof c->existence, "%s", v);
+        else if (!strcmp(k, "siret")) snprintf(c->siret, sizeof c->siret, "%s", v);
         else if (!strcmp(k, "modele")) snprintf(c->modele, sizeof c->modele, "%s", v);
         else if (!strcmp(k, "dossier")) snprintf(c->dossier, sizeof c->dossier, "%s", v);
+        else if (!strcmp(k, "signature")) snprintf(c->signature, sizeof c->signature, "%s", v);
     }
     fclose(f);
 }
@@ -152,12 +162,22 @@ typedef struct {
 
 typedef struct {
     char date[32], mh[128], mf[128], ah[128], af[128], duree[24];
+    int signe_matin, signe_aprem;
 } ligne_feuille;
+
+/* Signature du stagiaire, placée dans les colonnes « Signature stagiaire » */
+typedef struct {
+    const char *chemin;    /* chemin dans l'archive */
+    const char *type_mime;
+    double largeur, hauteur; /* pouces */
+} signature;
 
 typedef struct {
     ligne_feuille l[NB_LIGNES];
-    char nom[128];
+    const config *conf;
     char periode[64];
+    char annee[16]; /* année scolaire, ex. "2026/2027" */
+    signature sig;  /* largeur nulle = pas de signature */
 } feuille;
 
 static int cmp_seance(const void *a, const void *b)
@@ -215,11 +235,77 @@ static const char *JOURS[] = {"dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "s
 static const char *MOIS[] = {"janvier", "février", "mars", "avril", "mai", "juin", "juillet",
                              "août", "septembre", "octobre", "novembre", "décembre"};
 
+/* Dimensions des cases « Signature stagiaire » du modèle, en pouces */
+#define LARGEUR_COL_MS 1.2028
+#define LARGEUR_COL_AS 1.3139
+#define HAUTEUR_LIGNE 0.2917
+#define MARGE_SIGNATURE 0.03
+
+/* Rapport largeur / hauteur d'une image SVG (viewBox ou width/height) ou PNG.
+   Retourne 0 si le format n'est pas reconnu. */
+static double ratio_image(const char *chemin, const char **type_mime)
+{
+    FILE *fp = fopen(chemin, "rb");
+    if (!fp) { perror(chemin); return 0; }
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof buf - 1, fp);
+    fclose(fp);
+    buf[n] = '\0';
+
+    if (n > 24 && !memcmp(buf, "\x89PNG", 4)) {
+        const unsigned char *u = (const unsigned char *)buf;
+        double w = (u[16] << 24) | (u[17] << 16) | (u[18] << 8) | u[19];
+        double h = (u[20] << 24) | (u[21] << 16) | (u[22] << 8) | u[23];
+        *type_mime = "image/png";
+        return h > 0 ? w / h : 0;
+    }
+    if (strstr(buf, "<svg")) {
+        double x, y, w = 0, h = 0;
+        const char *vb = strstr(buf, "viewBox=\"");
+        if (vb && sscanf(vb + 9, "%lf%*[ ,]%lf%*[ ,]%lf%*[ ,]%lf", &x, &y, &w, &h) == 4 && h > 0) {
+            *type_mime = "image/svg+xml";
+            return w / h;
+        }
+        const char *a = strstr(buf, " width=\""), *b = strstr(buf, " height=\"");
+        if (a && b && sscanf(a + 8, "%lf", &w) == 1 && sscanf(b + 9, "%lf", &h) == 1 && h > 0) {
+            *type_mime = "image/svg+xml";
+            return w / h;
+        }
+    }
+    return 0;
+}
+
+/* Cadre image centré dans la case (XML brut pour ods_remplir) */
+static const char *cadre_signature(const signature *s, const char *champ, int num, double largeur_col)
+{
+    static char xml[1024];
+    if (s->largeur <= 0) return NULL;
+    double l = s->largeur, h = s->hauteur;
+    if (l > largeur_col - 2 * MARGE_SIGNATURE) { /* image trop large : on réduit */
+        h *= (largeur_col - 2 * MARGE_SIGNATURE) / l;
+        l = largeur_col - 2 * MARGE_SIGNATURE;
+    }
+    snprintf(xml, sizeof xml, ODS_XML
+             "<draw:frame draw:z-index=\"%d\" draw:name=\"Signature %s%02d\" draw:style-name=\"gr1\" "
+             "draw:text-style-name=\"P1\" svg:width=\"%.4fin\" svg:height=\"%.4fin\" "
+             "svg:x=\"%.4fin\" svg:y=\"%.4fin\"><draw:image xlink:href=\"%s\" xlink:type=\"simple\" "
+             "xlink:show=\"embed\" xlink:actuate=\"onLoad\" draw:mime-type=\"%s\"><text:p/></draw:image>"
+             "</draw:frame>",
+             num * 2 + (champ[0] == 'A'), champ, num, l, h, (largeur_col - l) / 2,
+             (HAUTEUR_LIGNE - h) / 2, s->chemin, s->type_mime);
+    return xml;
+}
+
 static const char *resoudre(const char *cle, void *ctx)
 {
     const feuille *f = ctx;
-    if (!strcmp(cle, "NOM")) return f->nom;
+    if (!strcmp(cle, "NOM")) return f->conf->nom;
+    if (!strcmp(cle, "FORMATION")) return f->conf->formation;
+    if (!strcmp(cle, "ORGANISME")) return f->conf->organisme;
+    if (!strcmp(cle, "EXISTENCE")) return f->conf->existence;
+    if (!strcmp(cle, "SIRET")) return f->conf->siret;
     if (!strcmp(cle, "PERIODE")) return f->periode;
+    if (!strcmp(cle, "ANNEE")) return f->annee;
 
     char champ[8] = {0};
     int num = 0;
@@ -231,6 +317,8 @@ static const char *resoudre(const char *cle, void *ctx)
     if (!strcmp(champ, "AH")) return l->ah;
     if (!strcmp(champ, "AF")) return l->af;
     if (!strcmp(champ, "DT")) return l->duree;
+    if (!strcmp(champ, "MS")) return l->signe_matin ? cadre_signature(&f->sig, champ, num, LARGEUR_COL_MS) : NULL;
+    if (!strcmp(champ, "AS")) return l->signe_aprem ? cadre_signature(&f->sig, champ, num, LARGEUR_COL_AS) : NULL;
     return NULL;
 }
 
@@ -334,10 +422,18 @@ int main(int argc, char **argv)
     char *texte = NULL;
     if (c.fichier[0]) {
         texte = lire_fichier(c.fichier);
+    } else if (strstr(c.url, "COLLE-ICI")) {
+        fprintf(stderr, "Remplace l'URL d'exemple par ton lien CELCAT dans %s.\n", conf);
+        return 1;
     } else if (c.url[0]) {
         curl_global_init(CURL_GLOBAL_DEFAULT);
         texte = telecharger(c.url);
         curl_global_cleanup();
+    } else if (access(conf, R_OK) != 0) {
+        fprintf(stderr, "Fichier %s introuvable. Crée-le à partir de l'exemple :\n"
+                        "  cp emargement.conf.exemple emargement.conf\n"
+                        "puis complète-le (voir README.md).\n", conf);
+        return 1;
     } else {
         fprintf(stderr, "Aucune source : indique une URL (-u ou url= dans %s) ou un fichier (-f).\n", conf);
         return 1;
@@ -373,7 +469,10 @@ int main(int argc, char **argv)
 
     /* Remplissage de la feuille */
     static feuille f;
-    snprintf(f.nom, sizeof f.nom, "%s", c.nom);
+    f.conf = &c;
+    /* L'année scolaire commence en septembre */
+    int rentree = c.mois >= 9 ? c.annee : c.annee - 1;
+    snprintf(f.annee, sizeof f.annee, "%d/%d", rentree, rentree + 1);
     snprintf(f.periode, sizeof f.periode, "%s %d", MOIS[c.mois - 1], c.annee);
     f.periode[0] = (char)(f.periode[0] - 'a' + 'A'); /* Majuscule (mois sans accent initial) */
 
@@ -393,6 +492,8 @@ int main(int argc, char **argv)
         fmt_creneaux(&j->aprem, l->ah, sizeof l->ah);
         if (j->matin.ref) snprintf(l->mf, sizeof l->mf, "%s", j->matin.ref->formateur);
         if (j->aprem.ref) snprintf(l->af, sizeof l->af, "%s", j->aprem.ref->formateur);
+        l->signe_matin = j->matin.nb > 0;
+        l->signe_aprem = j->aprem.nb > 0;
 
         long m = demi_minutes(&j->matin) + demi_minutes(&j->aprem);
         total_mois += m;
@@ -408,7 +509,24 @@ int main(int argc, char **argv)
         fprintf(stderr, "ATTENTION : %d jour(s) de cours en trop pour les %d lignes de la feuille.\n",
                 debordement, NB_LIGNES);
 
-    if (ods_remplir(c.modele, c.sortie, resoudre, &f) != 0) return 1;
+    /* Signature (optionnelle) : ajoutée à l'archive et placée par cadre_signature */
+    ods_fichier image = {0};
+    if (c.signature[0]) {
+        const char *type_mime = NULL;
+        double ratio = ratio_image(c.signature, &type_mime);
+        if (ratio > 0) {
+            f.sig.type_mime = type_mime;
+            f.sig.chemin = !strcmp(type_mime, "image/png") ? "Pictures/signature.png"
+                                                           : "Pictures/signature.svg";
+            f.sig.hauteur = HAUTEUR_LIGNE - 2 * MARGE_SIGNATURE;
+            f.sig.largeur = f.sig.hauteur * ratio;
+            image = (ods_fichier){c.signature, f.sig.chemin, type_mime};
+        } else {
+            fprintf(stderr, "Signature %s ignorée : formats acceptés SVG et PNG.\n", c.signature);
+        }
+    }
+
+    if (ods_remplir(c.modele, c.sortie, resoudre, &f, image.source ? &image : NULL) != 0) return 1;
 
     printf("\n%d jour(s), %ldh%02ld de cours, %d séance(s) ignorée(s) -> %s\n",
            n, total_mois / 60, total_mois % 60, ignores, c.sortie);

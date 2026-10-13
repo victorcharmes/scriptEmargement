@@ -1,11 +1,34 @@
-# Copie ce fichier en "emargement.conf" et complète-le.
-# Lien d'abonnement iCal de ton emploi du temps CELCAT
-# (le même que celui ajouté dans Google Agenda "À partir de l'URL")
+# Configuration de emargement : copie ce fichier en "emargement.conf" puis complète-le.
+#   cp emargement.conf.exemple emargement.conf
+# Format : cle=valeur, une par ligne. Les lignes commençant par # sont ignorées.
+
+# --- Obligatoire -------------------------------------------------------------
+
+# Lien d'abonnement iCalendar (.ics) de ton emploi du temps CELCAT,
+# à récupérer sur https://edt.univ-tlse3.fr/icalfeed/ (voir README.md)
 url=https://COLLE-ICI-TON-LIEN-CELCAT.ics
 
-nom=Victor CHARMES
-modele=modele_emargement.ods
+# Ton nom, tel qu'il doit apparaître sur la feuille
+nom=Prénom NOM
 
-# Dossier où écrire le .ods et le .pdf (optionnel, défaut : dossier courant)
-# ex. le dossier Téléchargements de Windows depuis WSL :
-#dossier=/mnt/c/Users/TON-NOM/Downloads
+# Intitulé de ta formation
+formation=M1 INFO PARC SDL
+
+# --- Organisme de formation (en-tête de la feuille) ---------------------------
+# Valeurs de l'Université de Toulouse : à changer si tu es dans un autre établissement.
+organisme=Université de Toulouse
+existence=76311365631
+siret=93827139200012
+
+# --- Optionnel ---------------------------------------------------------------
+
+# Dossier où écrire le .ods et le .pdf (défaut : dossier courant)
+# ex. le Bureau Windows depuis WSL :
+#dossier=/mnt/c/Users/TON-NOM-WINDOWS/Desktop
+
+# Ta signature (SVG ou PNG), ajoutée automatiquement dans les cases
+# « Signature stagiaire » de chaque demi-journée de cours
+#signature=signature.svg
+
+# Modèle de feuille (défaut : modele_emargement.ods)
+#modele=modele_emargement.ods

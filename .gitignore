@@ -1,6 +1,10 @@
 # Conf perso (lien CELCAT privé)
 emargement.conf
 
+# Signature perso
+signature.svg
+signature.png
+
 # Compilation
 emargement
 src/*.o
@@ -10,3 +14,4 @@ emargement_*.ods
 emargement_*.pdf
 test/emargement_*.ods
 test/emargement_*.pdf
+emargement.log

@@ -14,7 +14,7 @@ src/%.o: src/%.c src/ics.h src/ods.h
 
 # Test hors ligne avec l'emploi du temps d'octobre 2026
 test: emargement
-	./emargement -f test/octobre_2026.ics -m 2026-10 -n "Victor CHARMES" -o test/emargement_2026-10.ods
+	./emargement -f test/octobre_2026.ics -m 2026-10 -c emargement.conf.exemple -o test/emargement_2026-10.ods
 
 clean:
 	rm -f $(OBJ) emargement
