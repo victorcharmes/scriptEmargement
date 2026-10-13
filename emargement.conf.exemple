@@ -1,0 +1,11 @@
+# Copie ce fichier en "emargement.conf" et complète-le.
+# Lien d'abonnement iCal de ton emploi du temps CELCAT
+# (le même que celui ajouté dans Google Agenda "À partir de l'URL")
+url=https://COLLE-ICI-TON-LIEN-CELCAT.ics
+
+nom=Victor CHARMES
+modele=modele_emargement.ods
+
+# Dossier où écrire le .ods et le .pdf (optionnel, défaut : dossier courant)
+# ex. le dossier Téléchargements de Windows depuis WSL :
+#dossier=/mnt/c/Users/TON-NOM/Downloads

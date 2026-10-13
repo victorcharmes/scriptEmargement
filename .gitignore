@@ -1,0 +1,12 @@
+# Conf perso (lien CELCAT privé)
+emargement.conf
+
+# Compilation
+emargement
+src/*.o
+
+# Fichiers générés
+emargement_*.ods
+emargement_*.pdf
+test/emargement_*.ods
+test/emargement_*.pdf
