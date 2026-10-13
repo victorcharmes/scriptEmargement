@@ -174,8 +174,8 @@ la case. Les demi-journées sans cours restent vides. Sans `signature=`, ces cas
 ### Choisir le dossier de sortie
 
 Par défaut, les fichiers sont créés dans le dossier du projet. Avec `dossier=`, tu peux les écrire
-ailleurs. Il faut donner un **chemin complet** (`~` n'est pas compris) vers un dossier **qui existe
-déjà**.
+ailleurs, dans un dossier **qui existe déjà**. Donne de préférence un **chemin complet** (`~` n'est
+pas compris). Un chemin relatif part du dossier du projet.
 
 - **Linux** : par exemple ton dossier Documents. Tape `echo ~/Documents` pour obtenir son chemin
   complet :
@@ -192,13 +192,15 @@ déjà**.
 
 ## 3. Utilisation
 
-Lance toujours le programme **depuis le dossier du projet** : il y cherche `emargement.conf` et le
-modèle.
+Depuis le dossier du projet :
 
 ```bash
 ./emargement                 # mois automatique (voir ci-dessous)
 ./emargement -m 2026-11      # mois précis
 ```
+
+Tu peux aussi le lancer depuis n'importe quel dossier (`~/scriptEmargement/emargement`) : la conf,
+le modèle et la signature sont toujours cherchés dans le dossier du projet.
 
 **Mois automatique** : lancé entre le 1er et le 20, il génère le mois en cours ; après le 20, le
 mois suivant. Ça marche donc aussi bien en début qu'en fin de mois.
@@ -312,3 +314,8 @@ src/main.c   configuration, options, regroupement par jour / demi-journée, choi
 src/ics.c    lecture du flux iCalendar (dépliage des lignes, échappements, dates UTC)
 src/ods.c    copie du modèle .ods et remplacement des balises {{...}} dans content.xml (libzip)
 ```
+
+## Licence
+
+Distribué sous licence [MIT](LICENSE) : libre d'utilisation, de modification et de
+redistribution, en conservant la mention de copyright.

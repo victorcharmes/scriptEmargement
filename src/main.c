@@ -12,12 +12,15 @@
  */
 #define _GNU_SOURCE
 #include <curl/curl.h>
+#include <ctype.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "ics.h"
@@ -39,14 +42,40 @@ typedef struct {
     char organisme[128];
     char existence[32];
     char siret[32];
-    char modele[512];
-    char sortie[512];
-    char dossier[512];
-    char signature[512];
+    char modele[PATH_MAX];
+    char sortie[PATH_MAX];
+    char dossier[PATH_MAX];
+    char signature[PATH_MAX];
     int annee, mois; /* 0 = automatique */
     int sans_pdf;
 } config;
 
+/* Dossier qui contient `chemin` (sans le '/' final), "." s'il n'y en a pas */
+static void dossier_de(const char *chemin, char *out, size_t n)
+{
+    const char *slash = strrchr(chemin, '/');
+    if (!slash) snprintf(out, n, ".");
+    else if (slash == chemin) snprintf(out, n, "/");
+    else snprintf(out, n, "%.*s", (int)(slash - chemin), chemin);
+}
+
+/* `v` relatif est interprété par rapport à `base` ; absolu, il est gardé tel quel */
+static void chemin_depuis(const char *base, const char *v, char *out, size_t n)
+{
+    if (v[0] == '/' || !strcmp(base, ".")) snprintf(out, n, "%s", v);
+    else snprintf(out, n, "%s/%s", base, v);
+}
+
+static char *rogner(char *s)
+{
+    while (isspace((unsigned char)*s)) s++;
+    size_t n = strlen(s);
+    while (n && isspace((unsigned char)s[n - 1])) s[--n] = '\0';
+    return s;
+}
+
+/* Lit `cle=valeur` ligne par ligne. Les chemins relatifs (modele, dossier,
+   signature) sont relatifs au dossier du fichier de conf. */
 static void lire_conf(const char *chemin, config *c, int obligatoire)
 {
     FILE *f = fopen(chemin, "r");
@@ -54,23 +83,32 @@ static void lire_conf(const char *chemin, config *c, int obligatoire)
         if (obligatoire) { perror(chemin); exit(1); }
         return;
     }
+    char base[PATH_MAX];
+    dossier_de(chemin, base, sizeof base);
+
     char ligne[1200];
-    while (fgets(ligne, sizeof ligne, f)) {
-        ligne[strcspn(ligne, "\r\n")] = '\0';
-        if (ligne[0] == '#' || !strchr(ligne, '=')) continue;
-        char *eq = strchr(ligne, '=');
+    for (int num = 1; fgets(ligne, sizeof ligne, f); num++) {
+        char *l = ligne;
+        if (num == 1 && !strncmp(l, "\xEF\xBB\xBF", 3)) l += 3; /* BOM UTF-8 (éditeurs Windows) */
+        l = rogner(l);
+        if (!*l || *l == '#') continue;
+        char *eq = strchr(l, '=');
+        if (!eq) {
+            fprintf(stderr, "%s, ligne %d ignorée (attendu cle=valeur) : %s\n", chemin, num, l);
+            continue;
+        }
         *eq = '\0';
-        const char *k = ligne, *v = eq + 1;
-        while (*v == ' ') v++;
+        const char *k = rogner(l), *v = rogner(eq + 1);
         if (!strcmp(k, "url")) snprintf(c->url, sizeof c->url, "%s", v);
         else if (!strcmp(k, "nom")) snprintf(c->nom, sizeof c->nom, "%s", v);
         else if (!strcmp(k, "formation")) snprintf(c->formation, sizeof c->formation, "%s", v);
         else if (!strcmp(k, "organisme")) snprintf(c->organisme, sizeof c->organisme, "%s", v);
         else if (!strcmp(k, "existence")) snprintf(c->existence, sizeof c->existence, "%s", v);
         else if (!strcmp(k, "siret")) snprintf(c->siret, sizeof c->siret, "%s", v);
-        else if (!strcmp(k, "modele")) snprintf(c->modele, sizeof c->modele, "%s", v);
-        else if (!strcmp(k, "dossier")) snprintf(c->dossier, sizeof c->dossier, "%s", v);
-        else if (!strcmp(k, "signature")) snprintf(c->signature, sizeof c->signature, "%s", v);
+        else if (!strcmp(k, "modele")) chemin_depuis(base, v, c->modele, sizeof c->modele);
+        else if (!strcmp(k, "dossier")) chemin_depuis(base, v, c->dossier, sizeof c->dossier);
+        else if (!strcmp(k, "signature")) chemin_depuis(base, v, c->signature, sizeof c->signature);
+        else fprintf(stderr, "%s, ligne %d : clé inconnue « %s » ignorée\n", chemin, num, k);
     }
     fclose(f);
 }
@@ -328,38 +366,72 @@ static const char *resoudre(const char *cle, void *ctx)
 
 #define SOFFICE_WINDOWS "/mnt/c/Program Files/LibreOffice/program/soffice.exe"
 
+/* Lance argv[0] (cherché dans le PATH) sans passer par un shell : les chemins
+   peuvent contenir espaces et apostrophes. Si `sortie` est fourni, y recopie
+   la sortie standard (sans le saut de ligne final).
+   Retourne le code de sortie du programme, 127 s'il est introuvable. */
+static int executer(char *const argv[], char *sortie, size_t n)
+{
+    int tube[2] = {-1, -1};
+    if (sortie && pipe(tube) != 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int nul = open("/dev/null", O_WRONLY);
+        dup2(sortie ? tube[1] : nul, STDOUT_FILENO);
+        dup2(nul, STDERR_FILENO);
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+    if (sortie) {
+        close(tube[1]);
+        size_t lu = 0;
+        ssize_t r;
+        while (lu + 1 < n && (r = read(tube[0], sortie + lu, n - 1 - lu)) > 0) lu += (size_t)r;
+        sortie[lu] = '\0';
+        sortie[strcspn(sortie, "\r\n")] = '\0';
+        close(tube[0]);
+    }
+    int st;
+    if (waitpid(pid, &st, 0) < 0) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
 /* Convertit `ods` en PDF dans le même dossier ; écrit le chemin produit dans `pdf`.
    Utilise soffice de Linux s'il existe, sinon celui de Windows (WSL). */
 static int convertir_pdf(const char *ods, char *pdf, size_t n)
 {
-    char abs[PATH_MAX], dossier[PATH_MAX], cmd[3 * PATH_MAX];
+    char abs[PATH_MAX], dossier[PATH_MAX];
     if (!realpath(ods, abs)) { perror(ods); return -1; }
-    snprintf(dossier, sizeof dossier, "%s", abs);
-    *strrchr(dossier, '/') = '\0';
-
-    if (system("command -v soffice >/dev/null 2>&1") == 0) {
-        snprintf(cmd, sizeof cmd,
-                 "soffice --headless --convert-to pdf --outdir '%s' '%s' >/dev/null 2>&1",
-                 dossier, abs);
-    } else if (access(SOFFICE_WINDOWS, X_OK) == 0) {
-        /* L'exécutable Windows attend des chemins Windows */
-        snprintf(cmd, sizeof cmd,
-                 "'" SOFFICE_WINDOWS "' --headless --convert-to pdf "
-                 "--outdir \"$(wslpath -w '%s')\" \"$(wslpath -w '%s')\" >/dev/null 2>&1",
-                 dossier, abs);
-    } else {
-        fprintf(stderr, "LibreOffice introuvable : PDF non généré "
-                        "(sudo apt install libreoffice-calc-nogui).\n");
-        return -1;
-    }
+    dossier_de(abs, dossier, sizeof dossier);
 
     snprintf(pdf, n, "%s", ods);
     char *ext = strrchr(pdf, '.');
     if (ext && !strchr(ext, '/')) *ext = '\0';
     strncat(pdf, ".pdf", n - strlen(pdf) - 1);
-
     remove(pdf);
-    if (system(cmd) != 0 || access(pdf, R_OK) != 0) {
+
+    char *linux_argv[] = {"soffice", "--headless", "--convert-to", "pdf",
+                          "--outdir", dossier, abs, NULL};
+    int r = executer(linux_argv, NULL, 0);
+    if (r == 127 && access(SOFFICE_WINDOWS, X_OK) == 0) {
+        /* L'exécutable Windows attend des chemins Windows */
+        char win_dossier[PATH_MAX], win_abs[PATH_MAX];
+        char *a1[] = {"wslpath", "-w", dossier, NULL}, *a2[] = {"wslpath", "-w", abs, NULL};
+        if (executer(a1, win_dossier, sizeof win_dossier) != 0 ||
+            executer(a2, win_abs, sizeof win_abs) != 0) {
+            fprintf(stderr, "Conversion des chemins pour Windows impossible (wslpath).\n");
+            return -1;
+        }
+        char *win_argv[] = {SOFFICE_WINDOWS, "--headless", "--convert-to", "pdf",
+                            "--outdir", win_dossier, win_abs, NULL};
+        r = executer(win_argv, NULL, 0);
+    }
+    if (r == 127) {
+        fprintf(stderr, "LibreOffice introuvable : PDF non généré (voir README.md, Installation).\n");
+        return -1;
+    }
+    if (r != 0 || access(pdf, R_OK) != 0) {
         fprintf(stderr, "Échec de la conversion PDF (LibreOffice est-il bloqué ?).\n");
         return -1;
     }
@@ -373,11 +445,20 @@ int main(int argc, char **argv)
     setenv("TZ", "Europe/Paris", 1);
     tzset();
 
-    config c = {0};
-    snprintf(c.modele, sizeof c.modele, "modele_emargement.ods");
+    /* Conf, modèle et sortie par défaut : dans le dossier du programme,
+       pour pouvoir le lancer depuis n'importe où */
+    char exe[PATH_MAX], projet[PATH_MAX], conf_defaut[PATH_MAX];
+    ssize_t ne = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (ne > 0) { exe[ne] = '\0'; dossier_de(exe, projet, sizeof projet); }
+    else snprintf(projet, sizeof projet, ".");
+
+    static config c;
+    chemin_depuis(projet, "modele_emargement.ods", c.modele, sizeof c.modele);
+    chemin_depuis(projet, "emargement.conf", conf_defaut, sizeof conf_defaut);
+    snprintf(c.dossier, sizeof c.dossier, "%s", projet);
 
     /* 1er passage : -c éventuel, puis lecture du fichier de conf */
-    const char *conf = "emargement.conf";
+    const char *conf = conf_defaut;
     int conf_explicite = 0;
     for (int i = 1; i + 1 < argc; i++)
         if (!strcmp(argv[i], "-c")) { conf = argv[i + 1]; conf_explicite = 1; }
@@ -413,10 +494,15 @@ int main(int argc, char **argv)
         c.mois = tm.tm_mon + 1;
         if (tm.tm_mday > 20 && ++c.mois > 12) { c.mois = 1; c.annee++; }
     }
-    if (!c.sortie[0])
-        snprintf(c.sortie, sizeof c.sortie, "%.400s%s" "emargement_%04d-%02d.ods",
-                 c.dossier, c.dossier[0] && c.dossier[strlen(c.dossier) - 1] != '/' ? "/" : "",
-                 c.annee, c.mois);
+    if (!c.sortie[0]) {
+        char nom_fichier[32];
+        snprintf(nom_fichier, sizeof nom_fichier, "emargement_%04d-%02d.ods", c.annee, c.mois);
+        size_t l = strlen(c.dossier);
+        if (l && c.dossier[l - 1] == '/') c.dossier[l - 1] = '\0';
+        chemin_depuis(c.dossier[0] ? c.dossier : ".", nom_fichier, c.sortie, sizeof c.sortie);
+    }
+    if (!c.nom[0])
+        fprintf(stderr, "Attention : nom= est vide dans %s, la case « Nom du stagiaire » restera vide.\n", conf);
 
     /* Lecture du flux */
     char *texte = NULL;
@@ -431,8 +517,8 @@ int main(int argc, char **argv)
         curl_global_cleanup();
     } else if (access(conf, R_OK) != 0) {
         fprintf(stderr, "Fichier %s introuvable. Crée-le à partir de l'exemple :\n"
-                        "  cp emargement.conf.exemple emargement.conf\n"
-                        "puis complète-le (voir README.md).\n", conf);
+                        "  cd %s && cp emargement.conf.exemple emargement.conf\n"
+                        "puis complète-le (voir README.md).\n", conf, projet);
         return 1;
     } else {
         fprintf(stderr, "Aucune source : indique une URL (-u ou url= dans %s) ou un fichier (-f).\n", conf);
