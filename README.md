@@ -22,33 +22,99 @@ nano emargement.conf                         # 2. complète-la (lien CELCAT, nom
 
 ## 1. Installation
 
-Le programme tourne sous **Linux** ou sous **Windows avec WSL** (Ubuntu).
+Le programme tourne sous **Linux** (Ubuntu, Debian, Fedora, Arch…) et sous **Windows avec WSL**.
+Il ne fonctionne ni sous Windows sans WSL, ni sous macOS pour l'instant.
+
+L'installation se fait en deux temps : installer les paquets selon ton système (étape A), puis
+récupérer et compiler le programme (étape B, la même pour tout le monde).
+
+### A. Installer les paquets
 
 <details>
-<summary>Pas encore de WSL sur Windows ?</summary>
+<summary><b>Windows (WSL)</b></summary>
 
-Ouvre PowerShell **en administrateur**, lance `wsl --install`, redémarre, puis ouvre
-« Ubuntu » depuis le menu Démarrer et choisis un nom d'utilisateur et un mot de passe.
-Toutes les commandes qui suivent se tapent dans ce terminal Ubuntu.
+Si tu n'as pas encore WSL : ouvre PowerShell **en administrateur**, lance `wsl --install`,
+redémarre, puis ouvre « Ubuntu » depuis le menu Démarrer et choisis un nom d'utilisateur et un mot
+de passe. Toutes les commandes qui suivent se tapent dans ce terminal Ubuntu.
+
+```bash
+sudo apt update
+sudo apt install -y git build-essential pkg-config libcurl4-openssl-dev libzip-dev
+sudo apt install -y libreoffice-calc-nogui fonts-crosextra-carlito
+```
 
 </details>
 
+<details>
+<summary><b>Linux : Ubuntu, Debian, Linux Mint, Pop!_OS…</b></summary>
+
+Ouvre un terminal :
+
 ```bash
-# Outils de compilation et bibliothèques
 sudo apt update
 sudo apt install -y git build-essential pkg-config libcurl4-openssl-dev libzip-dev
-
-# Conversion en PDF (LibreOffice sans interface + police compatible Calibri)
 sudo apt install -y libreoffice-calc-nogui fonts-crosextra-carlito
+```
 
-# Récupération et compilation
+Si `libreoffice-calc-nogui` est introuvable (distribution ancienne), installe `libreoffice-calc`
+à la place. Si LibreOffice est déjà installé sur ton PC, il sera utilisé tel quel : seule la police
+`fonts-crosextra-carlito` reste nécessaire.
+
+</details>
+
+<details>
+<summary><b>Linux : Fedora</b></summary>
+
+```bash
+sudo dnf install -y git gcc make pkgconf-pkg-config libcurl-devel libzip-devel
+sudo dnf install -y libreoffice-calc google-carlito-fonts
+```
+
+</details>
+
+<details>
+<summary><b>Linux : Arch, Manjaro, EndeavourOS</b></summary>
+
+```bash
+sudo pacman -S --needed git base-devel curl libzip
+sudo pacman -S --needed libreoffice-fresh ttf-carlito
+```
+
+</details>
+
+Pour une autre distribution, il te faut l'équivalent de : un compilateur C et `make`,
+`pkg-config`, les fichiers de développement de **libcurl** et **libzip**, **LibreOffice Calc**
+et la police **Carlito**.
+
+**À quoi servent ces paquets ?**
+- **git, compilateur, pkg-config** : récupérer et compiler le programme.
+- **libcurl, libzip** : télécharger l'emploi du temps et écrire le fichier `.ods`.
+- **LibreOffice Calc** : convertir la feuille en PDF, sans ouvrir de fenêtre.
+- **Carlito** : remplace Calibri, la police du modèle. Sans elle, la mise en page du PDF est décalée.
+
+### B. Récupérer et compiler (tous les systèmes)
+
+```bash
 git clone https://github.com/victorcharmes/scriptEmargement.git
 cd scriptEmargement
 make
 make test   # vérifie que tout marche : crée test/emargement_2026-10.ods et .pdf
 ```
 
-Si `make test` affiche `PDF -> test/emargement_2026-10.pdf`, l'installation est terminée.
+Si `make test` se termine par `PDF -> test/emargement_2026-10.pdf`, l'installation est terminée.
+Tu peux ouvrir ce PDF pour voir à quoi ressemble la feuille.
+
+### Mettre à jour
+
+Pour récupérer une nouvelle version du programme :
+
+```bash
+cd scriptEmargement
+git pull
+make
+```
+
+Ta configuration et ta signature ne sont pas touchées.
 
 ---
 
@@ -105,15 +171,22 @@ la case. Les demi-journées sans cours restent vides. Sans `signature=`, ces cas
 
 `signature.svg` et `signature.png` sont exclus de git : ta signature ne part pas sur GitHub.
 
-### Écrire directement sur le Bureau Windows
+### Choisir le dossier de sortie
 
-Depuis WSL, le disque `C:` est accessible sous `/mnt/c`. Par exemple :
+Par défaut, les fichiers sont créés dans le dossier du projet. Avec `dossier=`, tu peux les écrire
+ailleurs. Il faut donner un **chemin complet** (`~` n'est pas compris) vers un dossier **qui existe
+déjà**.
 
-```
-dossier=/mnt/c/Users/TON-NOM-WINDOWS/Desktop
-```
-
-Le dossier doit déjà exister.
+- **Linux** : par exemple ton dossier Documents. Tape `echo ~/Documents` pour obtenir son chemin
+  complet :
+  ```
+  dossier=/home/camille/Documents/emargement
+  ```
+- **WSL** : le disque `C:` de Windows est accessible sous `/mnt/c`, donc tu peux écrire directement
+  sur le Bureau Windows :
+  ```
+  dossier=/mnt/c/Users/TON-NOM-WINDOWS/Desktop
+  ```
 
 ---
 
@@ -217,8 +290,14 @@ reste centrée.
 
 ## Lancement automatique chaque mois (optionnel)
 
-Sous WSL, cron ne tourne que si systemd est activé (`/etc/wsl.conf` → `[boot]` `systemd=true`).
-Ensuite :
+Avec cron, la feuille peut être générée toute seule chaque mois :
+
+- **Linux** : cron fonctionne directement. S'il n'est pas installé : `sudo apt install cron`
+  (Ubuntu/Debian) ou `sudo dnf install cronie` puis `sudo systemctl enable --now crond` (Fedora).
+- **WSL** : cron ne tourne que si systemd est activé (`/etc/wsl.conf` → `[boot]` `systemd=true`),
+  et seulement quand WSL est ouvert.
+
+Puis :
 
 ```bash
 crontab -e
